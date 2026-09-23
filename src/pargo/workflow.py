@@ -128,6 +128,21 @@ class Workflow(BaseModel):
         return self.trigger_on
 
     @property
+    def child_workflows(self) -> list[Workflow]:
+        """
+        Workflows this one launches as children, across all of its stages.
+
+        Lets callers draw the dependency graph of a fan-out without reaching
+        into the node list, which stays private.
+        """
+        return [
+            workflow
+            for node in self._nodes
+            if isinstance(node, WorkflowNode)
+            for workflow in node.task
+        ]
+
+    @property
     def data_path(self):
         data_path = pargo_path() / self.name
         data_path.mkdir(exist_ok=True, parents=True)
@@ -140,9 +155,9 @@ class Workflow(BaseModel):
         if callable(node):
             node = StepNode(task=node, **kwargs)
         elif isinstance(node, Workflow):
-            node = WorkflowNode(task=[node])
+            node = WorkflowNode(task=[node], **kwargs)
         elif isinstance(node, list) and all(isinstance(w, Workflow) for w in node):
-            node = WorkflowNode(task=node)
+            node = WorkflowNode(task=node, **kwargs)
         self._nodes.append(node)
         return self
 

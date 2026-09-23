@@ -12,7 +12,7 @@ from pydantic_core._pydantic_core import ValidationError
 import tests.utils as test_utils
 from pargo import Foreach, When, Workflow
 from pargo.nodes.import_path import import_path
-from pargo.utils import add_item, choice, double, get_items, triple, void
+from pargo.utils import add_item, boom, choice, double, get_items, triple, void
 
 
 def lint_yaml(tmp_path):
@@ -360,6 +360,70 @@ def test_workflow_group_yaml(tmp_path):
     data = yaml_path.read_text()
     assert "WorkflowTemplate" in data
     assert "groupflow" in data
+
+    if which("argo"):
+        lint_yaml(tmp_path)
+
+
+def test_workflow_child_workflows():
+    """Test that child_workflows reports the workflows launched by every stage."""
+    testflow1 = Workflow.new("testflow1").next(void)
+    testflow2 = Workflow.new("testflow2").next(void)
+
+    groupflow = (
+        Workflow.new("groupflow")
+        .next(double)
+        .next([testflow1, testflow2])
+        .next(testflow1)
+    )
+
+    assert [w.name for w in groupflow.child_workflows] == [
+        "testflow1",
+        "testflow2",
+        "testflow1",
+    ]
+    assert Workflow.new("plainflow").next(double).child_workflows == []
+
+
+def test_workflow_group_continue_on_failure(tmp_path):
+    """Test that a failing workflow in a group does not stop the parent when allowed to."""
+    okflow = Workflow.new("okflow", parameters={"x": 2}).next(void)
+    badflow = Workflow.new("badflow", parameters={"x": 0}).next(boom)
+
+    groupflow = (
+        Workflow.new("groupflow", parameters={"x": 1})
+        .next([badflow, okflow], continue_on_failure=True)
+        .next(double)
+    )
+    groupflow.run()
+
+    data_path = tmp_path / ".pargo" / "groupflow" / "data.json"
+    data = loads(data_path.read_text())
+    assert data["x"] == 2
+    assert (tmp_path / ".pargo" / "okflow" / "data.json").exists()
+
+
+def test_workflow_group_fails_by_default(tmp_path):
+    """Test that a failing workflow in a group stops the parent unless told otherwise."""
+    badflow = Workflow.new("badflow", parameters={"x": 0}).next(boom)
+    groupflow = Workflow.new("groupflow", parameters={"x": 1}).next([badflow])
+
+    with pytest.raises(RuntimeError):
+        groupflow.run()
+
+
+def test_workflow_group_continue_on_failure_yaml(tmp_path):
+    """Test that continue_on_failure ends up as continueOn in the manifest."""
+    testflow1 = Workflow.new("testflow1", parameters={"x": 1}).next(void)
+    testflow2 = Workflow.new("testflow2", parameters={"x": 2}).next(void)
+    groupflow = Workflow.new("groupflow").next(
+        [testflow1, testflow2], continue_on_failure=True
+    )
+
+    groupflow.to_yaml(path=tmp_path)
+    data = (tmp_path / "groupflow.yaml").read_text()
+    assert data.count("continueOn") == 2
+    assert "failed: true" in data
 
     if which("argo"):
         lint_yaml(tmp_path)

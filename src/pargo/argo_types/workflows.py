@@ -76,6 +76,8 @@ class ResourceTemplate(BaseModel):
     name: str
     inputs: ParameterMap = None
     resource: Resource
+    memoize: dict[str, Any] | None = None
+    synchronization: dict[str, Any] | None = None
     serviceAccountName: str = Field(default_factory=lambda: config.SERVICE_ACCOUNT)
     parallelism: int | None = None
     retryStrategy: RetryStrategy | None = None
@@ -90,6 +92,7 @@ class WorkflowSpec(BaseModel):
     podGC: PodGC | None = None
     parallelism: int | None = None
     podMetadata: None | PodMetadata = None
+    workflowMetadata: dict[str, Any] | None = None
 
 
 class WorkflowResource(BaseModel):

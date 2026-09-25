@@ -442,6 +442,48 @@ def test_workflow_group_continue_on_failure_yaml(tmp_path):
         lint_yaml(tmp_path)
 
 
+def test_workflow_labels():
+    """Test that labels land on the template and on the Workflows run from it."""
+    labelled = Workflow.new("labelflow", labels={"team": "data"}).next(void).to_argo()
+    assert labelled.metadata.labels == {"team": "data"}
+    assert labelled.spec.workflowMetadata == {"labels": {"team": "data"}}
+
+    plain = Workflow.new("plainflow").next(void).to_argo()
+    assert plain.metadata.labels is None
+    assert plain.spec.workflowMetadata is None
+
+
+def test_workflow_group_memoize_yaml(tmp_path):
+    """Test that a memoized child is cached by name and locked against concurrent parents."""
+    memoflow = Workflow.new("memoflow", memoize="20h").next(void)
+    plainflow = Workflow.new("plainflow").next(void)
+    groupflow = Workflow.new("groupflow").next([memoflow, plainflow])
+
+    templates = {t.name: t for t in groupflow.to_argo().spec.templates}
+    memo = templates["step-0-workflow-memoflow"]
+    assert memo.memoize["key"].startswith("memoflow-")
+    assert memo.memoize["maxAge"] == "20h"
+    assert memo.memoize["cache"] == {"configMap": {"name": "pargo-memoize"}}
+    # A changed child definition gets a fresh cache entry.
+    changed = Workflow.new("memoflow", memoize="20h", parameters={"x": 1}).next(void)
+    (changed_memo,) = [
+        t
+        for t in Workflow.new("g").next(changed).to_argo().spec.templates
+        if getattr(t, "memoize", None)
+    ]
+    assert changed_memo.memoize["key"] != memo.memoize["key"]
+    assert memo.synchronization == {"mutexes": [{"name": "memoflow"}]}
+    assert templates["step-0-workflow-plainflow"].memoize is None
+    assert templates["step-0-workflow-plainflow"].synchronization is None
+
+    with pytest.raises(ValidationError):
+        Workflow.new("badflow", memoize="1 day")
+
+    groupflow.to_yaml(path=tmp_path)
+    if which("argo"):
+        lint_yaml(tmp_path)
+
+
 def test_workflow_group_run_mixed(tmp_path):
     """Test that Workflow.run runs without error and produce expected output for tasks and workflows."""
     testflow1 = Workflow.new("testflow1", parameters={"x": 0}).next(void)

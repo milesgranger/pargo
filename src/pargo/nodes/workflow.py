@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from pydantic import Field
 from yaml import dump
 
+from .. import config
 from ..argo_types.primitives import Metadata, TemplateRef
 from ..argo_types.workflows import (
     Parameter,
@@ -82,6 +84,16 @@ class WorkflowNode(Node):
                 name=template_name,
                 resource=resource,
             )
+            if workflow.memoize:
+                # ponytail: hashes the spec only, so a task code change behind the same
+                # image tag still hits the old cache; bump the image tag to bust it.
+                spec = workflow.to_argo().spec.model_dump_json(exclude_none=True)
+                template.memoize = {
+                    "key": f"{workflow.name}-{sha256(spec.encode()).hexdigest()[:12]}",
+                    "maxAge": workflow.memoize,
+                    "cache": {"configMap": {"name": config.MEMOIZE_CONFIGMAP}},
+                }
+                template.synchronization = {"mutexes": [{"name": workflow.name}]}
             templates.append(template)
 
         return templates
